@@ -1,0 +1,29 @@
+[package]
+name = "kasotaisaku-bot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serenity = { version = "0.12.2", features = [
+  "framework",
+  "standard_framework",
+  "http",
+] }
+
+tokio = { version = "1.21.2", features = [
+  "macros",
+  "signal",
+  "rt-multi-thread",
+] }
+
+ask_gemini = "0.1.4"
+
+# log
+dotenvy = "0.15.7"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = [
+  "std",
+  "env-filter",
+  "time",
+  "local-time",
+] }
