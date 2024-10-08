@@ -1,10 +1,11 @@
 use std::env;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serenity::all::{CreateAllowedMentions, CreateMessage, GuildId, UserId};
+use serenity::all::{CreateMessage, GuildId, UserId};
 use serenity::async_trait;
+use serenity::http::Http;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
@@ -20,67 +21,66 @@ impl TypeMapKey for ServerMembers {
     type Value = Vec<UserId>;
 }
 
-#[derive(Clone)]
-struct Senders {
-    s: Arc<Sender<bool>>,
-}
-
 struct MessageSenderContent;
 
 impl TypeMapKey for MessageSenderContent {
     type Value = Senders;
 }
 
+struct Senders(Sender<bool>);
+
+impl Senders {
+    fn send(&self) {
+        let r = self.0.send(true);
+        info!("{:?}", r);
+    }
+    fn update(&mut self, new_sender: Sender<bool>) {
+        self.0 = new_sender
+    }
+}
+
 fn mention(id: UserId) -> String {
     format!("<@{}>", id)
+}
+
+fn timer(http: Arc<Http>, msg: Message, receiver: Receiver<bool>, user_id: UserId) {
+    tokio::spawn(async move {
+        // let member = members.choose(&mut thread_rng()).unwrap();
+        info!("tokio new thread");
+        if let Err(_) = receiver.recv_timeout(TIME_OUT) {
+            let mention = mention(user_id);
+            let create_msg = CreateMessage::new().content(mention);
+
+            if let Ok(msg) = msg.channel_id.send_message(http, create_msg).await {
+                info!("{:#?}", msg.content)
+            }
+        } else {
+            info!("recv message")
+        }
+    });
 }
 
 struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, message: Message) {
+    async fn message(&self, ctx: Context, msg: Message) {
         let mut sender_content = ctx.data.write().await;
         let sender = sender_content.get_mut::<MessageSenderContent>().unwrap();
 
-        let e = sender.s.send(true);
-        info!("{:?}", e);
+        sender.send();
 
         let (new_sender, receiver) = channel::<bool>();
 
-        sender.s = Arc::new(new_sender);
+        sender.update(new_sender);
 
         // let data = ctx.data.read().await;
         // if let Some(members) = data.get::<ServerMembers>() {
         //     info!("{:#?}", members)
         // }
 
-        let http = ctx.http;
-        tokio::spawn(async move {
-            // let member = members.choose(&mut thread_rng()).unwrap();
-
-            info!("tokio new thread");
-            if let Err(_) = receiver.recv_timeout(TIME_OUT) {
-                let id = message.author.id;
-                let mention = mention(id);
-
-                if let Ok(msg) = message
-                    .channel_id
-                    .send_message(
-                        http,
-                        CreateMessage::new()
-                            .allowed_mentions(CreateAllowedMentions::new().users([id]))
-                            .content(mention),
-                    )
-                    .await
-                {
-                    let m = msg.content;
-                    info!("{:#?}", m)
-                }
-            } else {
-                info!("recv message")
-            }
-        });
+        let user_id = msg.author.id;
+        timer(ctx.http, msg, receiver, user_id);
     }
 
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -119,7 +119,7 @@ async fn main() {
     {
         let (s, _) = channel::<bool>();
         let mut data = client.data.write().await;
-        data.insert::<MessageSenderContent>(Senders { s: Arc::new(s) });
+        data.insert::<MessageSenderContent>(Senders(s));
     }
 
     if let Err(why) = client.start().await {
