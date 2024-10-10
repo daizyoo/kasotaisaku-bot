@@ -3,6 +3,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use serenity::all::{CreateMessage, GuildId, UserId};
 use serenity::async_trait;
 use serenity::http::Http;
@@ -24,16 +26,17 @@ impl TypeMapKey for ServerMembers {
 struct MessageSenderContent;
 
 impl TypeMapKey for MessageSenderContent {
-    type Value = Senders;
+    type Value = SenderContent;
 }
 
-struct Senders(Sender<bool>);
+struct SenderContent(Sender<bool>);
 
-impl Senders {
+impl SenderContent {
     fn send(&self) {
-        let r = self.0.send(true);
-        info!("{:?}", r);
+        let result = self.0.send(true);
+        info!("{:?}", result);
     }
+
     fn update(&mut self, new_sender: Sender<bool>) {
         self.0 = new_sender
     }
@@ -45,9 +48,8 @@ fn mention(id: UserId) -> String {
 
 fn timer(http: Arc<Http>, msg: Message, receiver: Receiver<bool>, user_id: UserId) {
     tokio::spawn(async move {
-        // let member = members.choose(&mut thread_rng()).unwrap();
-        info!("tokio new thread");
-        if let Err(_) = receiver.recv_timeout(TIME_OUT) {
+        info!("start");
+        if receiver.recv_timeout(TIME_OUT).is_err() {
             let mention = mention(user_id);
             let create_msg = CreateMessage::new().content(mention);
 
@@ -57,6 +59,7 @@ fn timer(http: Arc<Http>, msg: Message, receiver: Receiver<bool>, user_id: UserI
         } else {
             info!("recv message")
         }
+        info!("end")
     });
 }
 
@@ -65,21 +68,27 @@ struct Handler;
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
-        let mut sender_content = ctx.data.write().await;
-        let sender = sender_content.get_mut::<MessageSenderContent>().unwrap();
-
-        sender.send();
+        info!("{}", msg.author.name);
 
         let (new_sender, receiver) = channel::<bool>();
 
-        sender.update(new_sender);
+        {
+            let mut sender_content = ctx.data.write().await;
+            let Some(sender) = sender_content.get_mut::<MessageSenderContent>() else {
+                panic!("get sender_content error")
+            };
 
-        // let data = ctx.data.read().await;
-        // if let Some(members) = data.get::<ServerMembers>() {
-        //     info!("{:#?}", members)
-        // }
+            sender.send();
 
-        let user_id = msg.author.id;
+            sender.update(new_sender);
+        }
+
+        let server_members = ctx.data.read().await;
+        let Some(members) = server_members.get::<ServerMembers>() else {
+            panic!("members get error")
+        };
+        let user_id = *members.choose(&mut thread_rng()).unwrap();
+
         timer(ctx.http, msg, receiver, user_id);
     }
 
@@ -119,7 +128,7 @@ async fn main() {
     {
         let (s, _) = channel::<bool>();
         let mut data = client.data.write().await;
-        data.insert::<MessageSenderContent>(Senders(s));
+        data.insert::<MessageSenderContent>(SenderContent(s));
     }
 
     if let Err(why) = client.start().await {
